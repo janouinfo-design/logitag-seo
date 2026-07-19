@@ -266,6 +266,7 @@ class ContentGenerateRequest(BaseModel):
     tone: Literal["professionnel", "amical", "expert", "pedagogique"] = "professionnel"
     target_length: Literal["court", "moyen", "long"] = "moyen"
     extra_instructions: Optional[str] = None
+    suggestion_key: Optional[str] = None
 
 
 class DraftCreate(BaseModel):

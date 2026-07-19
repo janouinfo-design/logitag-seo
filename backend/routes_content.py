@@ -143,6 +143,13 @@ async def generate_content_async(req: ContentGenerateRequest, user=Depends(get_c
                 {"id": job_id},
                 {"$set": {"status": "completed", "result": draft.model_dump(), "completed_at": now_iso()}},
             )
+            if req.suggestion_key:
+                await db.generated_suggestions.update_one(
+                    {"user_id": user["id"], "site_id": req.site_id, "key": req.suggestion_key},
+                    {"$set": {"draft_id": draft.id, "title": draft.title, "created_at": now_iso()},
+                     "$setOnInsert": {"id": gen_id(), "user_id": user["id"], "site_id": req.site_id, "key": req.suggestion_key}},
+                    upsert=True,
+                )
         except HTTPException as exc:
             await db.generation_jobs.update_one(
                 {"id": job_id},
@@ -157,6 +164,15 @@ async def generate_content_async(req: ContentGenerateRequest, user=Depends(get_c
 
     asyncio.create_task(_bg())
     return {"job_id": job_id, "status": "pending"}
+
+
+@api.get("/sites/{site_id}/generated-suggestions")
+async def list_generated_suggestions(site_id: str, user=Depends(get_current_user)):
+    """Suggestions already turned into drafts — lets the UI mark them as done."""
+    items = await db.generated_suggestions.find(
+        {"user_id": user["id"], "site_id": site_id}, {"_id": 0}
+    ).to_list(500)
+    return {"generated": items}
 
 
 @api.get("/content/jobs/{job_id}")

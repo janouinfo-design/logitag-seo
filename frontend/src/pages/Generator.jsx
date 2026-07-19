@@ -48,6 +48,8 @@ export default function Generator() {
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [genMap, setGenMap] = useState({});
+  const [appliedKey, setAppliedKey] = useState(null);
 
   const fetchSuggestions = async () => {
     if (!activeSite) return toast.error("Sélectionnez d'abord un site");
@@ -61,6 +63,12 @@ export default function Generator() {
         toast.info("Aucune suggestion — lancez d'abord une analyse Keyword Intelligence ou Business Analyzer.");
       }
       setSuggestions(data.suggestions || []);
+      try {
+        const { data: gen } = await api.get(`/sites/${activeSite.id}/generated-suggestions`);
+        const map = {};
+        (gen.generated || []).forEach((g) => { map[g.key] = g; });
+        setGenMap(map);
+      } catch { /* silent */ }
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Impossible de charger les suggestions.");
     } finally {
@@ -75,6 +83,7 @@ export default function Generator() {
       city: s.city || "",
       keywords: [...new Set([...(s.keywords || [])])],
     }));
+    setAppliedKey(`gen:${s.topic || ""}`);
     setSuggestions([]);
     toast.success("Sujet appliqué — vous pouvez ajuster avant de générer.");
   };
@@ -125,6 +134,7 @@ export default function Generator() {
         tone: form.tone,
         target_length: form.target_length,
         extra_instructions: form.extra_instructions.trim() || null,
+        suggestion_key: appliedKey || null,
       });
       const jobId = job.job_id;
       toast.info("Génération en cours… (peut prendre 1-3 minutes)");
@@ -251,11 +261,18 @@ export default function Generator() {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-medium text-slate-900 group-hover:text-[#002FA7]">{s.topic}</span>
-                      {s.city && (
-                        <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-[#002FA7] bg-blue-50 px-2 py-0.5 rounded-full flex-shrink-0">
-                          <MapPin className="w-3 h-3" />{s.city}
-                        </span>
-                      )}
+                      <span className="flex items-center gap-1.5 flex-shrink-0">
+                        {genMap[`gen:${s.topic || ""}`] && (
+                          <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5" data-testid={`gen-suggestion-done-${i}`}>
+                            ✓ Déjà généré
+                          </span>
+                        )}
+                        {s.city && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-[#002FA7] bg-blue-50 px-2 py-0.5 rounded-full">
+                            <MapPin className="w-3 h-3" />{s.city}
+                          </span>
+                        )}
+                      </span>
                     </div>
                     {s.why && <div className="text-[11px] text-slate-500 mt-0.5">{s.why}</div>}
                   </button>

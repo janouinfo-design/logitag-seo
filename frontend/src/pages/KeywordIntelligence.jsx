@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useSites } from "@/contexts/SiteContext";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
@@ -61,12 +62,24 @@ function PotentialBar({ value }) {
 
 export default function KeywordIntelligence() {
   const { activeSite } = useSites();
+  const navigate = useNavigate();
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [savingKw, setSavingKw] = useState(null);
   const [generating, setGenerating] = useState(new Set());
+  const [genMap, setGenMap] = useState({});
   const pollRef = useRef(null);
+
+  const loadGenerated = useCallback(async () => {
+    if (!activeSite) return;
+    try {
+      const { data } = await api.get(`/sites/${activeSite.id}/generated-suggestions`);
+      const map = {};
+      (data.generated || []).forEach((g) => { map[g.key] = g; });
+      setGenMap(map);
+    } catch { /* silent */ }
+  }, [activeSite]);
 
   const loadLatest = useCallback(async () => {
     if (!activeSite) { setLoading(false); return; }
@@ -74,12 +87,13 @@ export default function KeywordIntelligence() {
     try {
       const { data } = await api.get(`/sites/${activeSite.id}/keyword-intelligence/latest`);
       setReport(data && data.summary ? data : null);
+      loadGenerated();
     } catch {
       setReport(null);
     } finally {
       setLoading(false);
     }
-  }, [activeSite]);
+  }, [activeSite, loadGenerated]);
 
   useEffect(() => {
     loadLatest();
@@ -140,7 +154,7 @@ export default function KeywordIntelligence() {
     }
   };
 
-  const generateContent = async (item, genKey) => {
+  const generateContent = async (item, genKey, suggestionKey) => {
     setGenerating((s) => new Set(s).add(genKey));
     try {
       const { data } = await api.post("/content/generate-async", {
@@ -151,6 +165,7 @@ export default function KeywordIntelligence() {
         city: item.city || null,
         tone: "professionnel",
         target_length: "moyen",
+        suggestion_key: suggestionKey || null,
       });
       toast.info("Génération lancée — le brouillon apparaîtra dans « Brouillons » dans 1-2 min.");
       const jobId = data.job_id;
@@ -161,6 +176,7 @@ export default function KeywordIntelligence() {
             clearInterval(interval);
             setGenerating((s) => { const n = new Set(s); n.delete(genKey); return n; });
             toast.success(`Brouillon « ${job.result?.title || ""} » prêt dans Brouillons !`);
+            loadGenerated();
           } else if (job.status === "failed") {
             clearInterval(interval);
             setGenerating((s) => { const n = new Set(s); n.delete(genKey); return n; });
@@ -413,20 +429,47 @@ export default function KeywordIntelligence() {
                     <div className="mt-2 text-[11px] text-slate-500">
                       Cibles : {(p.target_keywords || []).join(", ")}
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => generateContent(p, genKey)}
-                      disabled={generating.has(genKey)}
-                      data-testid={`kwintel-generate-plan-${i}`}
-                      className="mt-3 border-[#002FA7] text-[#002FA7] hover:bg-blue-50 w-fit"
-                    >
-                      {generating.has(genKey) ? (
-                        <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Génération…</>
-                      ) : (
-                        <><Sparkles className="w-3.5 h-3.5 mr-1.5" /> Générer ce contenu</>
-                      )}
-                    </Button>
+                    {genMap[`plan:${p.title}`] ? (
+                      <div className="mt-3 flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5" data-testid={`kwintel-plan-done-${i}`}>
+                          ✓ Généré
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigate(`/drafts/${genMap[`plan:${p.title}`].draft_id}`)}
+                          data-testid={`kwintel-view-draft-plan-${i}`}
+                          className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 w-fit"
+                        >
+                          Voir le brouillon
+                        </Button>
+                        <button
+                          type="button"
+                          title="Re-générer"
+                          onClick={() => generateContent(p, genKey, `plan:${p.title}`)}
+                          disabled={generating.has(genKey)}
+                          data-testid={`kwintel-regen-plan-${i}`}
+                          className="text-slate-400 hover:text-[#002FA7] transition-colors"
+                        >
+                          {generating.has(genKey) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => generateContent(p, genKey, `plan:${p.title}`)}
+                        disabled={generating.has(genKey)}
+                        data-testid={`kwintel-generate-plan-${i}`}
+                        className="mt-3 border-[#002FA7] text-[#002FA7] hover:bg-blue-50 w-fit"
+                      >
+                        {generating.has(genKey) ? (
+                          <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Génération…</>
+                        ) : (
+                          <><Sparkles className="w-3.5 h-3.5 mr-1.5" /> Générer ce contenu</>
+                        )}
+                      </Button>
+                    )}
                   </div>
                 );
               })}
@@ -461,16 +504,43 @@ export default function KeywordIntelligence() {
                           <td className="px-2 py-2.5 text-xs text-slate-600">{lp.suggested_title}</td>
                           <td className="px-2 py-2.5 text-xs text-slate-600">{lp.target_keyword}</td>
                           <td className="px-2 py-2.5 text-right pr-4">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => generateContent({ type: "page_locale", title: lp.suggested_title, target_keywords: [lp.target_keyword], city: lp.city }, genKey)}
-                              disabled={generating.has(genKey)}
-                              data-testid={`kwintel-generate-local-${i}`}
-                              className="border-[#002FA7] text-[#002FA7] hover:bg-blue-50"
-                            >
-                              {generating.has(genKey) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Générer"}
-                            </Button>
+                            {genMap[`local:${lp.city}:${lp.target_keyword}`] ? (
+                              <div className="flex items-center justify-end gap-2">
+                                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5" data-testid={`kwintel-local-done-${i}`}>
+                                  ✓ Généré
+                                </span>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => navigate(`/drafts/${genMap[`local:${lp.city}:${lp.target_keyword}`].draft_id}`)}
+                                  data-testid={`kwintel-view-draft-local-${i}`}
+                                  className="border-emerald-600 text-emerald-700 hover:bg-emerald-50"
+                                >
+                                  Voir le brouillon
+                                </Button>
+                                <button
+                                  type="button"
+                                  title="Re-générer"
+                                  onClick={() => generateContent({ type: "page_locale", title: lp.suggested_title, target_keywords: [lp.target_keyword], city: lp.city }, genKey, `local:${lp.city}:${lp.target_keyword}`)}
+                                  disabled={generating.has(genKey)}
+                                  data-testid={`kwintel-regen-local-${i}`}
+                                  className="text-slate-400 hover:text-[#002FA7] transition-colors"
+                                >
+                                  {generating.has(genKey) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => generateContent({ type: "page_locale", title: lp.suggested_title, target_keywords: [lp.target_keyword], city: lp.city }, genKey, `local:${lp.city}:${lp.target_keyword}`)}
+                                disabled={generating.has(genKey)}
+                                data-testid={`kwintel-generate-local-${i}`}
+                                className="border-[#002FA7] text-[#002FA7] hover:bg-blue-50"
+                              >
+                                {generating.has(genKey) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Générer"}
+                              </Button>
+                            )}
                           </td>
                         </tr>
                       );

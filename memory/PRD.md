@@ -236,6 +236,12 @@ Préférence : 20 fonctionnalités exceptionnelles plutôt que 100 moyennes.
   pour ADMIN_EMAILS). AuthContext rafraîchit /auth/me après login/register (bugfix rôle).
   ⚠️ Leçon: ne PAS faire plusieurs search_replace sur le MÊME fichier dans un seul batch parallèle (3 éditions perdues).
 
+- [x] **Marquage « ✓ Généré » des suggestions** (2026-06-15, testé E2E screenshot + curl) : quand un contenu
+  est généré depuis une suggestion (Keyword Intelligence : pages locales + plan de contenu ; Générateur IA :
+  suggestions de sujets), la suggestion est marquée d'un badge vert « ✓ Généré » + bouton « Voir le brouillon »
+  + petit bouton re-générer. Backend : champ `suggestion_key` dans ContentGenerateRequest, collection
+  `generated_suggestions` (upsert à la fin du job), GET /api/sites/{id}/generated-suggestions.
+
 ## Backlog / Phase 2 (P0)
 - [x] Génération en lot (batch) — fait (Automation.jsx)
 - [x] Calendrier éditorial cron — fait
