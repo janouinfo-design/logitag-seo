@@ -242,6 +242,11 @@ Préférence : 20 fonctionnalités exceptionnelles plutôt que 100 moyennes.
   + petit bouton re-générer. Backend : champ `suggestion_key` dans ContentGenerateRequest, collection
   `generated_suggestions` (upsert à la fin du job), GET /api/sites/{id}/generated-suggestions.
 
+- [x] **SMTP pour l'envoi d'emails** (2026-06-15, testé unit + curl + UI) : `send_email()` central dans
+  app_core.py — SMTP prioritaire (env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM,
+  SMTP_SECURITY=starttls|ssl|none), fallback Resend. Utilisé par reset password + invitations équipe.
+  Endpoint POST /api/admin/test-email + carte « Test d'envoi d'email » dans le Panneau Admin.
+
 ## Backlog / Phase 2 (P0)
 - [x] Génération en lot (batch) — fait (Automation.jsx)
 - [x] Calendrier éditorial cron — fait

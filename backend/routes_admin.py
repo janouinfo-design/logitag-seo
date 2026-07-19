@@ -67,6 +67,25 @@ async def admin_users(admin=Depends(require_platform_admin)):
     return {"users": out}
 
 
+class TestEmailRequest(BaseModel):
+    to: str
+
+
+@api.post("/admin/test-email")
+async def admin_test_email(payload: TestEmailRequest, admin=Depends(require_platform_admin)):
+    from app_core import RESEND_API_KEY, SMTP_HOST, send_email
+    if not SMTP_HOST and not RESEND_API_KEY:
+        raise HTTPException(400, "Aucun envoi d'email configuré. Ajoutez SMTP_HOST/SMTP_USER/SMTP_PASSWORD (ou RESEND_API_KEY) dans le .env puis redémarrez le backend.")
+    method = await send_email(
+        payload.to,
+        "Email de test — LOGI SEO Booster",
+        "<p>✅ Votre configuration d'envoi d'emails fonctionne correctement.</p><p>— LOGI SEO Booster</p>",
+    )
+    if not method:
+        raise HTTPException(502, "Échec de l'envoi. Vérifiez SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD et SMTP_SECURITY dans le .env (voir logs backend pour le détail).")
+    return {"ok": True, "method": method}
+
+
 class PlanChange(BaseModel):
     plan: Literal["free", "pro", "business", "agency"]
 

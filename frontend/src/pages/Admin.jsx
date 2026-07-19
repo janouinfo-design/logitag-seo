@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { api } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import { toast } from "sonner";
-import { Users, Globe, FileText, Euro, ShieldCheck } from "lucide-react";
+import { Users, Globe, FileText, Euro, ShieldCheck, Mail } from "lucide-react";
 
 const PLAN_LABELS = { free: "Free", pro: "Pro", business: "Business", agency: "Agency" };
 
@@ -14,6 +14,54 @@ function StatCard({ icon: Icon, label, value, sub, testid }) {
       </div>
       <div className="font-display text-2xl font-bold text-slate-950">{value}</div>
       {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
+function TestEmailCard() {
+  const [to, setTo] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const sendTest = async (e) => {
+    e.preventDefault();
+    setSending(true);
+    try {
+      const { data } = await api.post("/admin/test-email", { to });
+      toast.success(`Email de test envoyé via ${data.method.toUpperCase()} ✓`);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Échec de l'envoi");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg p-5 mb-8" data-testid="admin-test-email-card">
+      <div className="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
+        <Mail className="w-4 h-4 text-[#002FA7]" /> Test d'envoi d'email
+      </div>
+      <p className="text-xs text-slate-500 mb-3">
+        Vérifie votre configuration SMTP (ou Resend en secours) — invitations et réinitialisations de mot de passe.
+      </p>
+      <form onSubmit={sendTest} className="flex flex-col sm:flex-row gap-3">
+        <input
+          type="email"
+          required
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="destinataire@exemple.ch"
+          data-testid="admin-test-email-input"
+          className="flex-1 border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#002FA7]/30 focus:border-[#002FA7]"
+        />
+        <button
+          type="submit"
+          disabled={sending}
+          data-testid="admin-test-email-button"
+          className="bg-[#002FA7] hover:bg-[#001D6B] disabled:opacity-60 text-white rounded-md px-5 py-2 text-sm font-medium transition-colors"
+        >
+          {sending ? "Envoi…" : "Envoyer un test"}
+        </button>
+      </form>
     </div>
   );
 }
@@ -80,6 +128,8 @@ export default function Admin() {
           testid="admin-stat-revenue"
         />
       </div>
+
+      <TestEmailCard />
 
       <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-200 text-sm font-semibold text-slate-900 flex items-center gap-2">

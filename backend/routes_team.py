@@ -4,10 +4,7 @@ from typing import Literal, Optional
 import os
 import secrets
 import httpx
-from app_core import FRONTEND_URL, api, db, gen_id, get_current_user, logger, now_iso
-
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM = os.environ.get("RESEND_FROM", "LOGI SEO Booster <onboarding@resend.dev>")
+from app_core import FRONTEND_URL, api, db, gen_id, get_current_user, logger, now_iso, send_email
 
 ROLE_LABELS = {"admin": "Admin", "editor": "Éditeur", "viewer": "Lecteur"}
 
@@ -31,28 +28,16 @@ async def _current_workspace(user: dict) -> dict:
 
 
 async def _send_invite_email(to_email: str, invite_link: str, workspace_name: str, role: str) -> bool:
-    if not RESEND_API_KEY:
-        return False
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "from": RESEND_FROM,
-                    "to": [to_email],
-                    "subject": f"Invitation à rejoindre {workspace_name} — LOGI SEO Booster",
-                    "html": (
-                        f"<p>Bonjour,</p><p>Vous êtes invité(e) à rejoindre l'espace de travail "
-                        f"<strong>{workspace_name}</strong> en tant que <strong>{ROLE_LABELS.get(role, role)}</strong>.</p>"
-                        f"<p><a href=\"{invite_link}\">Cliquez ici pour créer votre compte et rejoindre l'équipe</a>.</p>"
-                    ),
-                },
-            )
-        return r.status_code in (200, 201)
-    except Exception as exc:
-        logger.warning("Invite email failed: %s", exc)
-        return False
+    method = await send_email(
+        to_email,
+        f"Invitation à rejoindre {workspace_name} — LOGI SEO Booster",
+        (
+            f"<p>Bonjour,</p><p>Vous êtes invité(e) à rejoindre l'espace de travail "
+            f"<strong>{workspace_name}</strong> en tant que <strong>{ROLE_LABELS.get(role, role)}</strong>.</p>"
+            f"<p><a href=\"{invite_link}\">Cliquez ici pour créer votre compte et rejoindre l'équipe</a>.</p>"
+        ),
+    )
+    return method is not None
 
 
 class InviteCreate(BaseModel):

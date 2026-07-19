@@ -475,6 +475,59 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM = os.environ.get("RESEND_FROM", "LOGI SEO Booster <onboarding@resend.dev>")
 
+# --- SMTP configuration (preferred when set; Resend used as fallback) ---
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or 587)
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
+SMTP_SECURITY = os.environ.get("SMTP_SECURITY", "starttls").lower()  # starttls | ssl | none
+
+
+def _send_smtp_sync(to_email: str, subject: str, html: str) -> None:
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    if SMTP_SECURITY == "ssl":
+        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20)
+    else:
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20)
+        if SMTP_SECURITY == "starttls":
+            server.starttls()
+    if SMTP_USER:
+        server.login(SMTP_USER, SMTP_PASSWORD)
+    server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+    server.quit()
+
+
+async def send_email(to_email: str, subject: str, html: str) -> Optional[str]:
+    """Send an email via SMTP (if configured) with Resend fallback. Returns 'smtp'|'resend'|None."""
+    if SMTP_HOST:
+        try:
+            await asyncio.to_thread(_send_smtp_sync, to_email, subject, html)
+            return "smtp"
+        except Exception as exc:
+            logger.warning("SMTP send failed (%s), fallback Resend: %s", SMTP_HOST, exc)
+    if RESEND_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as _cli:
+                r = await _cli.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                    json={"from": RESEND_FROM, "to": [to_email], "subject": subject, "html": html},
+                )
+            if r.status_code in (200, 201):
+                return "resend"
+            logger.warning("Resend email failed (%s): %s", r.status_code, r.text[:200])
+        except Exception as exc:
+            logger.warning("Resend email error: %s", exc)
+    return None
+
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -486,31 +539,17 @@ class ResetPasswordRequest(BaseModel):
 
 
 async def _send_reset_email(to_email: str, reset_link: str) -> bool:
-    if not RESEND_API_KEY:
-        return False
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "from": RESEND_FROM,
-                    "to": [to_email],
-                    "subject": "Réinitialisation de votre mot de passe — LOGI SEO Booster",
-                    "html": (
-                        f"<p>Bonjour,</p><p>Vous avez demandé la réinitialisation de votre mot de passe.</p>"
-                        f"<p><a href=\"{reset_link}\">Cliquez ici pour choisir un nouveau mot de passe</a> "
-                        f"(lien valable 1 heure).</p>"
-                        f"<p>Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>"
-                    ),
-                },
-            )
-        if r.status_code in (200, 201):
-            return True
-        logger.warning("Resend email failed (%s): %s", r.status_code, r.text[:200])
-    except Exception as exc:
-        logger.warning("Resend email error: %s", exc)
-    return False
+    method = await send_email(
+        to_email,
+        "Réinitialisation de votre mot de passe — LOGI SEO Booster",
+        (
+            f"<p>Bonjour,</p><p>Vous avez demandé la réinitialisation de votre mot de passe.</p>"
+            f"<p><a href=\"{reset_link}\">Cliquez ici pour choisir un nouveau mot de passe</a> "
+            f"(lien valable 1 heure).</p>"
+            f"<p>Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>"
+        ),
+    )
+    return method is not None
 
 
 @api.post("/auth/forgot-password")
@@ -532,7 +571,7 @@ async def forgot_password(payload: ForgotPasswordRequest):
     reset_link = f"{base}/reset-password?token={token}"
     sent = await _send_reset_email(user["email"], reset_link)
     if not sent:
-        logger.warning("PASSWORD RESET LINK (email non configuré — RESEND_API_KEY absent) pour %s : %s",
+        logger.warning("PASSWORD RESET LINK (email non configuré — SMTP/RESEND absents) pour %s : %s",
                        user["email"], reset_link)
     return generic
 
