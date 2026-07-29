@@ -13,6 +13,7 @@ import asyncio
 import httpx
 import jwt
 import os
+import re
 from app_core import JWT_ALGORITHM, JWT_SECRET, SitePublic, api, db, dec, enc, get_current_user, logger, now_iso
 from routes_sites import _get_user_site, site_to_public
 
@@ -227,6 +228,36 @@ class GoogleSiteSettings(BaseModel):
     ga4_property_id: Optional[str] = None  # e.g. "123456789"
 
 
+async def _resolve_gsc_property(user_id: str, typed: str) -> str:
+    """Match the typed value against the user's real GSC properties (slash/www/sc-domain variants)."""
+    from googleapiclient.discovery import build
+    try:
+        creds = await _get_google_credentials(user_id)
+
+        def _list():
+            service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+            return service.sites().list().execute()
+
+        data = await asyncio.to_thread(_list)
+        props = [s.get("siteUrl") for s in data.get("siteEntry", []) if s.get("siteUrl")]
+    except Exception:
+        return typed
+    if typed in props:
+        return typed
+    domain = re.sub(r"^(sc-domain:|https?://)(www\.)?", "", typed.lower()).strip("/").split("/")[0]
+
+    def _norm(p: str) -> str:
+        return re.sub(r"^(sc-domain:|https?://)(www\.)?", "", p.lower()).strip("/")
+
+    for p in props:
+        if p == f"sc-domain:{domain}":
+            return p
+    for p in props:
+        if _norm(p) == domain:
+            return p
+    return typed
+
+
 @api.patch("/sites/{site_id}/google-settings", response_model=SitePublic)
 async def update_site_google_settings(site_id: str, payload: GoogleSiteSettings, user=Depends(get_current_user)):
     site = await db.sites.find_one({"id": site_id, "user_id": user["id"]})
@@ -234,9 +265,22 @@ async def update_site_google_settings(site_id: str, payload: GoogleSiteSettings,
         raise HTTPException(404, "Site introuvable")
     updates = {}
     if payload.gsc_site_url is not None:
-        updates["gsc_site_url"] = payload.gsc_site_url.strip() or None
+        typed = payload.gsc_site_url.strip()
+        updates["gsc_site_url"] = (await _resolve_gsc_property(user["id"], typed)) if typed else None
     if payload.ga4_property_id is not None:
-        updates["ga4_property_id"] = (payload.ga4_property_id or "").strip() or None
+        raw = (payload.ga4_property_id or "").strip()
+        if raw:
+            cleaned = raw[2:] if raw.upper().startswith("G-") else raw
+            cleaned = cleaned.replace(" ", "")
+            if not cleaned.isdigit():
+                raise HTTPException(400, (
+                    "GA4 Property ID invalide : il faut l'ID NUMÉRIQUE de la propriété (ex. 435235709), "
+                    "pas l'ID de mesure G-XXXXXXXX. Analytics → Administration → Paramètres de la propriété "
+                    "→ « ID DE LA PROPRIÉTÉ »."
+                ))
+            updates["ga4_property_id"] = cleaned
+        else:
+            updates["ga4_property_id"] = None
     if updates:
         await db.sites.update_one({"id": site_id}, {"$set": updates})
     site = await db.sites.find_one({"id": site_id}, {"_id": 0})
