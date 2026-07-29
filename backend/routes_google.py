@@ -431,7 +431,31 @@ async def _capture_rank_snapshot(user_id: str, site_id: str, lookback_days: int 
             "dimensions": ["query"],
             "rowLimit": 100,
         }).execute()
-    data = await asyncio.to_thread(_query)
+    try:
+        data = await asyncio.to_thread(_query)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        hint = ""
+        try:
+            def _list():
+                svc = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+                return svc.sites().list().execute()
+            listing = await asyncio.to_thread(_list)
+            props = [s.get("siteUrl") for s in listing.get("siteEntry", []) if s.get("siteUrl")]
+            if props:
+                hint = " Propriétés disponibles sur votre compte Google : " + " · ".join(props[:10])
+            else:
+                hint = " Votre compte Google connecté n'a accès à AUCUNE propriété Search Console — connectez le bon compte ou faites-vous ajouter comme utilisateur dans Search Console."
+        except Exception:
+            pass
+        msg = str(exc)
+        if "403" in msg or "permission" in msg.lower():
+            raise HTTPException(403, (
+                f"Search Console refuse l'accès à « {gsc_url} ». La propriété ne correspond pas exactement "
+                f"ou votre compte Google n'y a pas accès.{hint}"
+            ))
+        raise HTTPException(502, f"Erreur Search Console pour « {gsc_url} » : {msg[:200]}{hint}")
     today_iso = end_date.isoformat()
     # Idempotent: delete today's snapshot for this site before inserting
     await db.rank_snapshots.delete_many({"user_id": user_id, "site_id": site_id, "snapshot_date": today_iso})
