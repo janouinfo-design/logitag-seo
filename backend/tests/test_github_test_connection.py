@@ -156,7 +156,7 @@ class _FakeClient:
 
 @pytest.mark.asyncio
 async def test_unit_404_branch_a_repo_empty(monkeypatch):
-    from backend import routes_publish as rp
+    import routes_publish as rp
     from fastapi import HTTPException
 
     async def fake_get_user_site(site_id, user):
@@ -189,7 +189,7 @@ async def test_unit_404_branch_a_repo_empty(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_unit_404_branch_b_repo_exists_branch_missing(monkeypatch):
-    from backend import routes_publish as rp
+    import routes_publish as rp
     from fastapi import HTTPException
 
     async def fake_get_user_site(site_id, user):
@@ -223,7 +223,7 @@ async def test_unit_404_branch_b_repo_exists_branch_missing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_unit_404_branch_c_repo_inaccessible(monkeypatch):
-    from backend import routes_publish as rp
+    import routes_publish as rp
     from fastapi import HTTPException
 
     async def fake_get_user_site(site_id, user):

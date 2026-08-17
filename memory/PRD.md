@@ -247,6 +247,17 @@ Préférence : 20 fonctionnalités exceptionnelles plutôt que 100 moyennes.
   SMTP_SECURITY=starttls|ssl|none), fallback Resend. Utilisé par reset password + invitations équipe.
   Endpoint POST /api/admin/test-email + carte « Test d'envoi d'email » dans le Panneau Admin.
 
+- [x] **Refonte fetch_pages (AI Visibility / Business Analyzer / Keyword Intelligence)** (2026-06-15, testé live) :
+  Causes racines logitag.ch : (1) base_url stockée SANS protocole ("www.logitag.ch") → urlparse netloc vide →
+  0 page ; (2) rate-limit Wix HTTP 429 après ~10 requêtes rapides (robots + 8 sitemaps) → tous les fetchs finaux
+  échouaient. Fixes dans ai_visibility.py : normalize_base_url (https:// auto, slashs), homepage-first avec
+  redirects (URL finale = base de crawl, www/non-www tolérés), réutilisation du HTML homepage déjà téléchargé,
+  sitemapindex Wix suivi (sous-sitemaps → vraies pages, .xml exclus des pages), robots.txt Sitemap:, throttle
+  (sem 2 + 0.4s) + retry 429 (Retry-After), erreurs diagnostiquables en français (DNS/SSL/timeout/403/404/5xx),
+  fallback crawl homepage si sitemap absent (diag.note), diag dans report.fetch_diagnostic.
+  routes_sites.py : normalisation base_url à la création ET modification + crawler d'audit.
+  Fix test préexistant cassé (import 'from backend' dans test_github_test_connection.py).
+
 ## Backlog / Phase 2 (P0)
 - [x] Génération en lot (batch) — fait (Automation.jsx)
 - [x] Calendrier éditorial cron — fait

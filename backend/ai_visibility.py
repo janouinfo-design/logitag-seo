@@ -36,6 +36,34 @@ ESTIMATED_MODELS = [
 # ---------------------------------------------------------------------------
 # Fetching
 # ---------------------------------------------------------------------------
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 (compatible; LogiSEOBooster/1.0)")
+STATIC_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".css", ".js",
+              ".pdf", ".zip", ".mp4", ".mp3", ".avi", ".woff", ".woff2", ".ttf", ".eot",
+              ".xml", ".json", ".txt", ".gz")
+SKIP_PATH_TOKENS = ("login", "logout", "signin", "signup", "register", "admin", "wp-admin",
+                    "cart", "panier", "checkout", "account", "mon-compte", "password")
+
+
+def normalize_base_url(raw: str) -> str:
+    """trim + https:// par défaut + suppression des slashs superflus."""
+    u = (raw or "").strip()
+    if not u:
+        return ""
+    if not re.match(r"^https?://", u, re.I):
+        u = "https://" + u.lstrip("/")
+    parts = urlparse(u)
+    path = re.sub(r"/{2,}", "/", parts.path or "").rstrip("/")
+    return f"{parts.scheme}://{parts.netloc}{path}"
+
+
+def _same_site(netloc: str, host: str) -> bool:
+    a, b = netloc.lower(), host.lower()
+    a = a[4:] if a.startswith("www.") else a
+    b = b[4:] if b.startswith("www.") else b
+    return a == b
+
+
 async def _render_html(url: str) -> Optional[str]:
     try:
         from playwright.async_api import async_playwright
@@ -61,39 +89,121 @@ def _page_text(soup: BeautifulSoup) -> str:
 PRIORITY_PATTERNS = ["about", "a-propos", "apropos", "qui-sommes", "contact", "service", "prestation", "blog", "faq", "tarif"]
 
 
-async def fetch_pages(base_url: str, max_pages: int = 6) -> List[dict]:
-    base_url = (base_url or "").rstrip("/")
+async def fetch_pages(base_url: str, max_pages: int = 6, diag: Optional[dict] = None) -> List[dict]:
+    """Récupère les pages publiques d'un site : homepage d'abord, puis sitemap (index inclus), sinon crawl.
+    Lève RuntimeError avec un diagnostic précis si le site est réellement inaccessible."""
+    base_url = normalize_base_url(base_url)
     if not base_url:
-        return []
-    host = urlparse(base_url).netloc
-    headers = {"User-Agent": "LogiSEOBooster-AIVisibility/1.0"}
-    urls: List[str] = []
-    seen = set()
+        raise RuntimeError("Aucune URL publique configurée pour ce site.")
+    headers = {"User-Agent": BROWSER_UA, "Accept-Language": "fr-CH,fr;q=0.9,en;q=0.7"}
 
-    def add(u: str):
-        u = u.split("#")[0].split("?")[0].rstrip("/")
-        if u and u not in seen and urlparse(u).netloc == host:
+    async with httpx.AsyncClient(timeout=15, headers=headers, follow_redirects=True) as cli:
+        # 1. Homepage FIRST (l'analyse ne doit jamais échouer à cause d'un sitemap absent)
+        try:
+            r = await cli.get(base_url)
+        except httpx.ConnectTimeout:
+            raise RuntimeError(f"Timeout de connexion vers {base_url} — le serveur ne répond pas.")
+        except httpx.ConnectError as exc:
+            m = str(exc).lower()
+            if "ssl" in m or "certificate" in m:
+                raise RuntimeError(f"Certificat SSL invalide pour {base_url}.")
+            if "name" in m or "resolve" in m or "getaddrinfo" in m:
+                raise RuntimeError(f"Erreur DNS : le domaine {urlparse(base_url).netloc} est introuvable.")
+            raise RuntimeError(f"Domaine inaccessible ({base_url}) — connexion refusée.")
+        except httpx.TimeoutException:
+            raise RuntimeError(f"Timeout en récupérant {base_url}.")
+        except Exception as exc:
+            raise RuntimeError(f"Erreur en récupérant {base_url} : {type(exc).__name__}: {str(exc)[:150]}")
+        logger.info("fetch_pages: %s -> HTTP %s (final: %s)", base_url, r.status_code, r.url)
+        if r.status_code == 403:
+            raise RuntimeError(f"Le site {base_url} refuse l'accès (HTTP 403) — protection anti-robot probable.")
+        if r.status_code == 404:
+            raise RuntimeError(f"Page d'accueil introuvable (HTTP 404) sur {base_url} — vérifiez l'URL publique.")
+        if r.status_code >= 500:
+            raise RuntimeError(f"Le serveur de {base_url} est en erreur (HTTP {r.status_code}).")
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code} en récupérant {base_url}.")
+        home_html = r.text
+        if "<html" not in home_html.lower()[:3000] and "html" not in r.headers.get("content-type", "").lower():
+            raise RuntimeError(f"Aucun contenu HTML exploitable sur {base_url}.")
+        # 2. Suivre les redirects : l'URL finale devient la base de crawl (www / sans www)
+        base_url = normalize_base_url(str(r.url))
+        host = urlparse(base_url).netloc
+
+        urls: List[str] = []
+        seen = set()
+
+        def add(u: str):
+            u = urljoin(base_url + "/", (u or "").strip())
+            low = u.lower()
+            if low.startswith(("mailto:", "tel:", "javascript:", "ftp:")):
+                return
+            u = u.split("#")[0].split("?")[0].rstrip("/")
+            if not u or u in seen:
+                return
+            p = urlparse(u)
+            if p.scheme not in ("http", "https") or not _same_site(p.netloc, host):
+                return
+            path = p.path.lower()
+            if path.endswith(STATIC_EXT) or any(tok in path for tok in SKIP_PATH_TOKENS):
+                return
             seen.add(u)
             urls.append(u)
 
-    async with httpx.AsyncClient(timeout=12, headers=headers, follow_redirects=True) as cli:
+        add(base_url)
+        used_sitemap = False
+
+        # 3. robots.txt -> sitemaps déclarés
+        sitemap_candidates: List[str] = []
         try:
-            r = await cli.get(f"{base_url}/sitemap.xml")
-            if r.status_code == 200 and "xml" in r.headers.get("content-type", "").lower():
-                for loc in BeautifulSoup(r.text, "xml").find_all("loc"):
-                    add(loc.text.strip())
+            rob = await cli.get(f"{base_url}/robots.txt")
+            if rob.status_code == 200:
+                for line in rob.text.splitlines():
+                    if line.lower().startswith("sitemap:"):
+                        sitemap_candidates.append(line.split(":", 1)[1].strip())
         except Exception:
             pass
+        sitemap_candidates.append(f"{base_url}/sitemap.xml")
 
-        add(base_url)
-        if len(urls) < max_pages:
+        # 4. Sitemaps (gestion des index de sitemaps, ex. Wix)
+        async def load_sitemap(sm_url: str, depth: int = 0):
+            nonlocal used_sitemap
+            if depth > 1 or len(urls) >= max_pages * 3:
+                return
             try:
-                r = await cli.get(base_url)
-                if r.status_code == 200:
-                    for a in BeautifulSoup(r.text, "lxml").find_all("a", href=True):
-                        add(urljoin(base_url, a["href"]))
+                resp = await cli.get(sm_url)
+                if resp.status_code != 200:
+                    return
+                sm_soup = BeautifulSoup(resp.text, "xml")
+                if sm_soup.find("sitemapindex"):
+                    for loc in sm_soup.find_all("loc")[:6]:
+                        await load_sitemap(loc.text.strip(), depth + 1)
+                else:
+                    locs = [loc.text.strip() for loc in sm_soup.find_all("loc")]
+                    if locs:
+                        used_sitemap = True
+                    for loc in locs[:200]:
+                        add(loc)
             except Exception:
                 pass
+
+        for sm in list(dict.fromkeys(sitemap_candidates))[:3]:
+            if len(urls) >= max_pages * 3:
+                break
+            await load_sitemap(sm)
+
+        # 5. Fallback : crawl des liens internes de la homepage
+        if len(urls) < 2:
+            for a in BeautifulSoup(home_html, "lxml").find_all("a", href=True):
+                add(a["href"])
+                if len(urls) >= 50:
+                    break
+
+        if diag is not None:
+            diag["method"] = "sitemap" if used_sitemap else "crawl"
+            diag["note"] = None if used_sitemap else "Sitemap non disponible — analyse basée sur le crawl du site."
+            diag["base_url"] = base_url
+            diag["urls_found"] = len(urls)
 
         # Prioritise homepage + informative pages
         def prio(u: str) -> int:
@@ -108,14 +218,30 @@ async def fetch_pages(base_url: str, max_pages: int = 6) -> List[dict]:
         selected = sorted(urls, key=prio)[:max_pages]
 
         pages: List[dict] = []
-        sem = asyncio.Semaphore(3)
+        # Homepage : réutiliser le HTML déjà téléchargé (évite le rate-limit Wix 429)
+        home_soup = BeautifulSoup(home_html, "lxml")
+        pages.append({"url": base_url, "html": home_html, "soup": home_soup, "text": _page_text(home_soup)})
+        selected = [u for u in selected if u != base_url]
+        sem = asyncio.Semaphore(2)
 
         async def fetch_one(u: str):
             async with sem:
                 try:
                     rr = await cli.get(u)
+                    for delay in (3, 6):
+                        if rr.status_code != 429:
+                            break
+                        retry_after = rr.headers.get("retry-after")
+                        try:
+                            delay = min(10, int(retry_after)) if retry_after else delay
+                        except ValueError:
+                            pass
+                        await asyncio.sleep(delay)
+                        rr = await cli.get(u)
                     if rr.status_code >= 400:
+                        logger.info("fetch_pages: %s -> HTTP %s (ignoré)", u, rr.status_code)
                         return
+                    await asyncio.sleep(0.4)
                     html = rr.text
                     soup = BeautifulSoup(html, "lxml")
                     text = _page_text(soup)
@@ -527,7 +653,8 @@ def _clamp(v, lo=0, hi=100):
 
 async def run_ai_visibility_analysis(site: dict, llm_key: str) -> dict:
     base_url = site.get("base_url") or ""
-    pages = await fetch_pages(base_url)
+    fetch_diag: dict = {}
+    pages = await fetch_pages(base_url, diag=fetch_diag)
     if not pages:
         raise RuntimeError(f"Impossible de récupérer les pages de {base_url or 'ce site'} — vérifiez l'URL publique du site.")
 
@@ -591,4 +718,5 @@ async def run_ai_visibility_analysis(site: dict, llm_key: str) -> dict:
             "eeat_signals": eeat_sig,
         },
         "pages_analyzed": [p["url"] for p in pages],
+        "fetch_diagnostic": fetch_diag,
     }

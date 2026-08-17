@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import asyncio
 import httpx
 import re
+from ai_visibility import normalize_base_url
 from app_core import SiteCreate, SitePublic, SiteUpdate, api, db, dec, enc, gen_id, get_current_user, logger, now_iso
 
 # ---------------------------------------------------------------------------
@@ -68,7 +69,7 @@ async def create_site(payload: SiteCreate, user=Depends(get_current_user)):
         "wix_site_id": (payload.wix_site_id or "").strip() or None,
         "wix_account_id": (payload.wix_account_id or "").strip() or None,
         "wix_api_key": enc((payload.wix_api_key or "").strip()) or None,
-        "base_url": (payload.base_url or "").strip() or None,
+        "base_url": normalize_base_url(payload.base_url or "") or None,
         "vps_api_url": (payload.vps_api_url or "").strip() or None,
         "vps_api_token": enc((payload.vps_api_token or "").strip()) or None,
         "ftp_host": (payload.ftp_host or "").strip() or None,
@@ -109,6 +110,8 @@ async def update_site(site_id: str, payload: SiteUpdate, user=Depends(get_curren
     if not site:
         raise HTTPException(404, "Site introuvable")
     updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    if updates.get("base_url"):
+        updates["base_url"] = normalize_base_url(updates["base_url"])
     # Encrypt sensitive fields before persisting
     for sensitive in ("wix_api_key", "vps_api_token", "ftp_password", "github_token"):
         if sensitive in updates and updates[sensitive]:
@@ -257,7 +260,7 @@ async def crawl_public_site(site: dict, max_pages: int = 12, render_js: bool = T
     Extracts per-page: title, meta description, H1/H2 list, word count, images_total, images_without_alt.
     Also detects the framework (Next.js / React CRA / Vite / Vue / static) and reports a `stack_hint`.
     """
-    base_url = (site.get("base_url") or "").rstrip("/")
+    base_url = normalize_base_url(site.get("base_url") or "")
     if not base_url:
         return []
     try:
