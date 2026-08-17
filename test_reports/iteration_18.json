@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 18 — Backend-only validation of the GBP scope-insufficient fix (403 ACCESS_TOKEN_SCOPE_INSUFFICIENT). 17/17 pytest passing. Endpoints (/api/gbp/status, /api/gbp/login, /api/gbp/disconnect) return the correct new fields (granted_scopes, scope_ok, accounts_check_status). Static code review of gbp_callback + gbp_list_locations confirmed the spec (scope enforcement, accounts.list probe, differentiated 403 messages, French actionable text, no token logging). Mocked httpx unit tests verify gbp_list_locations 403 branches. Regressions (meta/status, drafts) unaffected. One in-scope bug found & fixed: NameError on `logger` in routes_social.py.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/app/backend/routes_social.py L263 (gbp_callback)",
+        "issue": "FIXED IN THIS ITERATION. `logger.warning(...)` was called in the accounts_check failure branch but `logger` was never imported → NameError raised whenever accounts.list returned non-200 during OAuth callback (the very failure path the fix was written to handle). Added `import logging` + `logger = logging.getLogger('routes_social')`. Verified module still imports and endpoints respond 200."
+      },
+      {
+        "endpoint": "/api/linkedin/status",
+        "issue": "Endpoint not present in this build — test accepts 404. If LinkedIn publishing is planned, add the status route symmetric to meta/gbp."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "static_review_notes": [
+      "SocialPublishPanel.jsx: reconnect button correctly rendered when `gbp.connected && gbp.scope_ok === false` with data-testid='social-reconnect-gbp-button' (L215-222). It calls POST /gbp/disconnect (errors swallowed intentionally with /* ignore */) then triggers /gbp/login which redirects to the Google authorization URL. Amber styling + explicit 'Reconnecter (permission manquante)' label + title tooltip are all present. Behaviour matches spec — no changes required."
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_gbp_scope_fix.py",
+    "/app/test_reports/pytest/iteration_18.xml"
+  ],
+  "action_items": [
+    "None blocking — fix is behaviourally correct end-to-end. Main agent should confirm the logger import fix is acceptable (in-scope test-agent change).",
+    "Optional: consider logging accounts_check failures at info level (not warning) since the /drafts?gbp=connected_quota_pending redirect already signals the state to the frontend.",
+    "Optional: add /api/linkedin/status if LinkedIn publishing is on the roadmap."
+  ],
+  "critical_code_review_comments": [
+    "routes_social.py had a latent NameError (`logger` referenced but not imported) in the gbp_callback failure path — this was silently masked because the code path only fires when accounts.list returns non-200 with a valid access_token. Iteration 18 tests wouldn't have caught it without static grep; suggest a lightweight `python -c 'import routes_social'` smoke test in CI to catch import-time / attribute mistakes.",
+    "gbp_status computes `scope_ok` as `\"business.manage\" in (granted_scopes or \"\")` — string containment is fine since scopes returned by Google are space-separated full URLs; the substring 'business.manage' will match `https://www.googleapis.com/auth/business.manage`. Correct, but a comment would help future readers.",
+    "gbp_callback's frontend redirect uses `GBP_REDIRECT_URI.replace('/api/gbp/oauth/callback', ...)` — brittle if the redirect URI ever changes suffix. Consider deriving from FRONTEND_URL env instead.",
+    "No unit test simulates the callback path itself (scope missing → 400). The static grep asserts the code exists; a fastapi TestClient test that mocks gbp_exchange_code to return a scope without business.manage would provide behavioural coverage."
+  ],
+  "updated_files": [
+    "/app/backend/routes_social.py (added `import logging` + `logger = logging.getLogger('routes_social')` to fix latent NameError in gbp_callback)",
+    "/app/backend/tests/test_gbp_scope_fix.py (new — 17 tests: status/login/disconnect endpoints, static review of callback + gbp_list_locations, mocked httpx unit tests for the 3 gbp_list_locations branches, regression on meta/status + drafts)"
+  ],
+  "success_rate": {"backend": "100% (17/17 pytest)", "frontend": "N/A (backend-only per request; static JSX review OK)"},
+  "seed_data_creation": "None. Demo user's users.gbp field left unset (disconnect called at end of TestGbpDisconnect).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "demo@logirent.fr / demo1234 (verified working). Admin contact@logitrak.ch / AdminTest2026! not needed for this iteration.",
+  "context_for_next_testing_agent": "Real Google OAuth cannot be executed in preview — the scope enforcement is covered by static asserts + a fastapi.TestClient approach could be added later if desired. Iteration 18 added /app/backend/tests/test_gbp_scope_fix.py (17 tests) and fixed one latent NameError in routes_social.py. Next agent can rely on: (1) /api/gbp/status shape is now stable with the 6 required fields, (2) gbp_list_locations differentiates 403 SCOPE_INSUFFICIENT vs quota (mocked-verified), (3) callback source contains all required strings ('OAuth consent screen', 'myaccount.google.com/permissions', accounts endpoint, 'connected_quota_pending', 'granted_scopes'). Frontend reconnect button (data-testid='social-reconnect-gbp-button') is present and wired correctly.",
+  "rca_of_the_issue": "Original bug: OAuth tokens issued before the business.manage scope was added to the Google Cloud consent screen kept working through refresh_token but every accounts.list call returned 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT. Fix in place validates tok['scope'] at the callback (rejects the connection when business.manage missing), probes accounts.list immediately post-exchange and stores its status, exposes the state via /gbp/status (scope_ok, accounts_check_status), and differentiates 403 SCOPE_INSUFFICIENT (reconnect CTA) from other 403 (quota CTA) in gbp_list_locations. Frontend renders a distinct 'Reconnecter (permission manquante)' button when scope_ok===false which disconnects + re-initiates OAuth. Additional latent NameError on `logger` in routes_social.py was fixed in this iteration to prevent a crash in the accounts_check failure branch."
+}

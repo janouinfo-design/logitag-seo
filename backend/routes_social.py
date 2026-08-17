@@ -7,9 +7,12 @@ from pydantic import BaseModel
 from typing import Optional
 import httpx
 import jwt
+import logging
 import os
 from app_core import EMERGENT_LLM_KEY, JWT_ALGORITHM, JWT_SECRET, api, db, dec, enc, get_current_user, now_iso
 from routes_google import GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
+
+logger = logging.getLogger("routes_social")
 
 # ---------------------------------------------------------------------------
 # Meta (Facebook + Instagram) OAuth + Publishing
@@ -194,6 +197,9 @@ async def gbp_status(user=Depends(get_current_user)):
         "server_configured": _gbp_configured(),
         "connected": bool(g.get("refresh_token")),
         "email": g.get("email"),
+        "granted_scopes": g.get("granted_scopes"),
+        "scope_ok": "business.manage" in (g.get("granted_scopes") or "") if g.get("refresh_token") else None,
+        "accounts_check_status": g.get("accounts_check_status"),
         "connected_at": g.get("connected_at"),
     }
 
@@ -236,6 +242,31 @@ async def gbp_callback(code: str = "", state: str = "", error: str = ""):
     if not refresh_token:
         raise HTTPException(400, "Google n'a pas retourné de refresh token. Révoquez l'accès de l'app sur myaccount.google.com/permissions puis reconnectez-vous.")
 
+    # Vérifier que le scope business.manage a RÉELLEMENT été accordé
+    granted_scopes = tok.get("scope", "")
+    if "business.manage" not in granted_scopes:
+        raise HTTPException(400, (
+            "Google n'a pas accordé le scope business.manage (accordé : "
+            f"{granted_scopes or 'aucun'}). Ajoutez le scope "
+            "https://www.googleapis.com/auth/business.manage dans Google Cloud → OAuth consent screen → "
+            "Data access, révoquez l'accès sur myaccount.google.com/permissions, puis reconnectez-vous."
+        ))
+
+    # Test réel immédiat : accounts.list doit répondre 200
+    accounts_check = {"status": None, "detail": None}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            ar = await client.get(
+                "https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
+                headers={"Authorization": f"Bearer {tok['access_token']}"},
+            )
+        accounts_check["status"] = ar.status_code
+        if ar.status_code != 200:
+            accounts_check["detail"] = ar.text[:200]
+            logger.warning("GBP accounts.list check failed at connect: %s %s", ar.status_code, ar.text[:200])
+    except Exception as exc:
+        accounts_check["detail"] = str(exc)[:200]
+
     email = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -253,10 +284,13 @@ async def gbp_callback(code: str = "", state: str = "", error: str = ""):
         {"$set": {"gbp": {
             "refresh_token": enc(refresh_token),
             "email": email,
+            "granted_scopes": granted_scopes,
+            "accounts_check_status": accounts_check["status"],
             "connected_at": now_iso(),
         }}},
     )
-    frontend_url = GBP_REDIRECT_URI.replace("/api/gbp/oauth/callback", "/drafts?gbp=connected")
+    ok_flag = "connected" if accounts_check["status"] == 200 else "connected_quota_pending"
+    frontend_url = GBP_REDIRECT_URI.replace("/api/gbp/oauth/callback", f"/drafts?gbp={ok_flag}")
     return RedirectResponse(url=frontend_url)
 
 

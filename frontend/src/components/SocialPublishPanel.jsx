@@ -212,6 +212,14 @@ export default function SocialPublishPanel({ draft, onPublished }) {
                 className={`${btnConnect} border-[#34A853] text-[#34A853] hover:bg-[#34A853]/5`}>
                 Connecter
               </button>
+            ) : gbp.scope_ok === false ? (
+              <button
+                onClick={async () => { try { await api.post("/gbp/disconnect"); } catch (e) { /* ignore */ } connect("/gbp/login"); }}
+                data-testid="social-reconnect-gbp-button"
+                title="L'ancienne connexion n'a pas la permission Google Business (business.manage). Cliquez pour vous reconnecter."
+                className={`${btnConnect} border-amber-500 text-amber-600 hover:bg-amber-50`}>
+                Reconnecter (permission manquante)
+              </button>
             ) : (
               <AlertDialog onOpenChange={(open) => open && loadGbpLocations()}>
                 <AlertDialogTrigger asChild>

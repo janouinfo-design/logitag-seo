@@ -71,7 +71,10 @@ export default function Drafts() {
       changed = true;
     }
     if (searchParams.get("gbp") === "connected") {
-      toast.success("Google Business Profile connecté ✓");
+      toast.success("Google Business Profile connecté ✓ (scope business.manage vérifié, comptes accessibles)");
+      searchParams.delete("gbp");
+    } else if (searchParams.get("gbp") === "connected_quota_pending") {
+      toast.warning("Google Business connecté avec le bon scope, mais l'API refuse encore l'accès — quota GBP probablement en attente d'approbation Google.", { duration: 10000 });
       searchParams.delete("gbp");
       changed = true;
     }

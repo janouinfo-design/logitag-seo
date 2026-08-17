@@ -149,6 +149,18 @@ async def gbp_list_locations(access_token: str) -> list:
     results = []
     async with httpx.AsyncClient(timeout=30.0) as client:
         r = await client.get(GBP_ACCOUNTS_URL, headers=headers)
+        if r.status_code == 403 and "SCOPE_INSUFFICIENT" in r.text:
+            raise HTTPException(403, (
+                "Le token Google Business n'a pas le scope business.manage (ancienne connexion). "
+                "Cliquez « Déconnecter Google Business » puis reconnectez-vous — le nouveau consentement "
+                "inclura le bon scope."
+            ))
+        if r.status_code == 403:
+            raise HTTPException(403, (
+                "Google Business refuse l'accès (quota API à 0 ?). Vérifiez que votre demande d'accès "
+                "GBP API a été approuvée par Google et que « My Business Account Management API » est activée. "
+                f"Détail : {r.text[:200]}"
+            ))
         if r.status_code != 200:
             raise HTTPException(502, f"Liste des comptes Google Business échouée (API activée + projet approuvé ?): {r.text[:300]}")
         accounts = r.json().get("accounts", [])

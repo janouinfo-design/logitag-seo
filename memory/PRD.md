@@ -279,6 +279,15 @@ Préférence : 20 fonctionnalités exceptionnelles plutôt que 100 moyennes.
   Wix (manage.wix.com/account/api-keys, permission Blog) et configurer le site logitag en type wix.
   LIMITE : image de couverture non envoyée à Wix (nécessite upload Wix Media, à faire si demandé).
 
+- [x] **Fix GBP 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT** (2026-06-15, testé 17/17 iteration_18) :
+  cause = tokens OAuth émis AVANT l'ajout du scope business.manage à l'écran de consentement Google Cloud.
+  routes_social.py gbp_callback : vérifie les scopes réellement accordés (rejet 400 si business.manage absent),
+  probe accounts.list immédiat (statut stocké), granted_scopes/scope_ok/accounts_check_status exposés dans
+  /api/gbp/status, redirect gbp=connected|connected_quota_pending. social_publishing.py gbp_list_locations :
+  403 SCOPE_INSUFFICIENT → message reconnexion, 403 autre → message quota. Frontend : bouton ambre
+  « Reconnecter (permission manquante) » (disconnect+relogin) quand scope_ok=false, toasts différenciés.
+  + fix NameError logger (testing agent). L'utilisateur doit se reconnecter à GBP après mise à jour VPS.
+
 ## Backlog / Phase 2 (P0)
 - [x] Génération en lot (batch) — fait (Automation.jsx)
 - [x] Calendrier éditorial cron — fait
