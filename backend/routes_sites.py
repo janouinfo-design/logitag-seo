@@ -174,10 +174,14 @@ async def _get_user_site(site_id: str, user: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Wix API helpers (with graceful fallback to mock data for MVP)
 # ---------------------------------------------------------------------------
+WIX_API = "https://www.wixapis.com"
+RICOS_PLUGINS = ["HEADING", "LINK", "TABLE", "DIVIDER", "CODE_BLOCK"]
+
+
 def wix_headers(site: dict) -> Dict[str, str]:
+    # Site-level calls: send ONLY wix-site-id (never both site & account ids)
     return {
         "Authorization": dec(site["wix_api_key"]),
-        "wix-account-id": site["wix_account_id"],
         "wix-site-id": site["wix_site_id"],
         "Content-Type": "application/json",
     }
@@ -543,41 +547,99 @@ async def fetch_wix_blog_posts(site: dict) -> List[dict]:
     ]
 
 
-async def create_wix_draft_post(site: dict, title: str, body_markdown: str, seo_title: Optional[str],
-                                seo_description: Optional[str]) -> Optional[str]:
-    """Try to create a draft post on Wix. Returns Wix draft id or None on failure."""
-    url = "https://www.wixapis.com/blog/v3/draft-posts"
-    rich_content = {
-        "nodes": [
-            {
-                "type": "PARAGRAPH",
-                "id": gen_id(),
-                "nodes": [{"type": "TEXT", "id": gen_id(), "textData": {"text": body_markdown}}],
-            }
-        ]
-    }
-    payload = {
-        "draftPost": {
-            "title": title,
-            "richContent": rich_content,
-            "seoData": {
-                "tags": [
-                    {"type": "title", "children": seo_title or title},
-                    {"type": "meta", "props": {"name": "description", "content": seo_description or ""}},
-                ]
-            },
-        }
-    }
+async def _wix_post(cli: httpx.AsyncClient, site: dict, path: str, body: dict) -> dict:
+    r = await cli.post(WIX_API + path, headers=wix_headers(site), json=body)
+    if r.status_code in (401, 403):
+        raise HTTPException(403, (
+            "Wix refuse l'accès : vérifiez la clé API (permission « Blog : Gérer » / Manage Blog requise) "
+            "et le Site ID. Wix Dashboard → Settings → API Keys."
+        ))
+    if r.status_code >= 400:
+        logger.warning("Wix API %s -> %s: %s", path, r.status_code, r.text[:300])
+        raise HTTPException(502, f"Erreur Wix ({r.status_code}) sur {path} : {r.text[:200]}")
+    return r.json()
+
+
+async def _wix_member_id(cli: httpx.AsyncClient, site: dict) -> Optional[str]:
+    if site.get("wix_member_id"):
+        return site["wix_member_id"]
     try:
-        async with httpx.AsyncClient(timeout=15) as cli:
-            r = await cli.post(url, headers=wix_headers(site), json=payload)
-        if r.status_code in (200, 201):
-            data = r.json()
-            return data.get("draftPost", {}).get("id")
-        logger.warning("Wix create draft failed: %s %s", r.status_code, r.text[:200])
+        r = await cli.get(f"{WIX_API}/members/v1/members?paging.limit=1", headers=wix_headers(site))
+        if r.status_code == 200:
+            members = r.json().get("members") or []
+            if members and members[0].get("id"):
+                mid = members[0]["id"]
+                await db.sites.update_one({"id": site["id"]}, {"$set": {"wix_member_id": mid}})
+                return mid
     except Exception as exc:
-        logger.warning("Wix create draft error: %s", exc)
+        logger.warning("Wix members lookup failed: %s", exc)
     return None
+
+
+async def create_wix_draft_post(site: dict, title: str, body_markdown: str, seo_title: Optional[str],
+                                seo_description: Optional[str], publish: bool = True) -> Optional[dict]:
+    """Markdown → Ricos (convertisseur officiel Wix) → brouillon → publication.
+    Retourne {draft_id, post_id, url} ou lève HTTPException avec un message actionnable."""
+    async with httpx.AsyncClient(timeout=30) as cli:
+        # 1. Conversion Markdown -> RichContent (Ricos)
+        conv = await _wix_post(cli, site, "/ricos/v1/ricos-document/convert/to-ricos",
+                               {"markdown": body_markdown, "options": {"plugins": RICOS_PLUGINS}})
+        document = conv.get("document")
+        if not document:
+            raise HTTPException(502, "Wix n'a pas pu convertir le contenu Markdown en RichContent.")
+        # 2. Validation (best-effort, fixDocument corrige les écarts)
+        try:
+            checked = await _wix_post(cli, site, "/ricos/v1/ricos-document/validate",
+                                      {"document": document, "plugins": RICOS_PLUGINS, "fixDocument": True})
+            document = checked.get("validDocument") or document
+        except HTTPException:
+            pass
+        # 3. Auteur requis pour les intégrations externes
+        member_id = await _wix_member_id(cli, site)
+        draft_post: dict = {"title": (title or "Article")[:200], "richContent": document}
+        if seo_description:
+            draft_post["excerpt"] = seo_description[:500]
+        if member_id:
+            draft_post["memberId"] = member_id
+        created = await _wix_post(cli, site, "/blog/v3/draft-posts",
+                                  {"draftPost": draft_post, "publish": False, "fieldsets": ["URL"]})
+        draft = created.get("draftPost", {})
+        draft_id = draft.get("id")
+        if not draft_id:
+            raise HTTPException(502, "Wix n'a pas renvoyé d'identifiant de brouillon.")
+        url = None
+        u = draft.get("url") or {}
+        if isinstance(u, dict) and (u.get("base") or u.get("path")):
+            url = f"{u.get('base', '')}{u.get('path', '')}" or None
+        post_id = None
+        # 4. Publication réelle
+        if publish:
+            pub = await _wix_post(cli, site, f"/blog/v3/draft-posts/{draft_id}/publish", {})
+            post_id = pub.get("postId") or draft_id
+        return {"draft_id": draft_id, "post_id": post_id, "url": url}
+
+
+@api.post("/sites/{site_id}/test-wix")
+async def test_wix_connection(site_id: str, user=Depends(get_current_user)):
+    """Vérifie la clé API Wix : accès Blog + membre auteur disponible."""
+    site = await _get_user_site(site_id, user)
+    if not (site.get("wix_api_key") and site.get("wix_site_id")):
+        raise HTTPException(400, "Configurez d'abord wix_api_key et wix_site_id pour ce site.")
+    async with httpx.AsyncClient(timeout=20) as cli:
+        r = await cli.get(f"{WIX_API}/blog/v3/posts?paging.limit=1", headers=wix_headers(site))
+        if r.status_code in (401, 403):
+            raise HTTPException(403, (
+                "Wix refuse l'accès : vérifiez la clé API (permission « Blog : Gérer » requise) et le Site ID."
+            ))
+        if r.status_code >= 400:
+            raise HTTPException(502, f"Erreur Wix ({r.status_code}) : {r.text[:200]}")
+        member_id = await _wix_member_id(cli, site)
+    return {
+        "ok": True,
+        "blog_access": True,
+        "member_id": member_id,
+        "warning": None if member_id else "Aucun membre Wix trouvé — l'auteur du post pourrait être requis par Wix.",
+    }
 
 
 @api.get("/sites/{site_id}/pages")

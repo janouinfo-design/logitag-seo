@@ -806,19 +806,24 @@ async def publish_draft(draft_id: str, payload: PublishRequest, user=Depends(get
 
     site_type = site.get("site_type", "wix")
     wix_draft_id: Optional[str] = None
+    wix_post_id: Optional[str] = None
+    wix_url: Optional[str] = None
     vps_published_id: Optional[str] = None
     ftp_published_slug: Optional[str] = None
     status_label: str
 
     if site_type == "wix":
-        wix_draft_id = await create_wix_draft_post(
+        wix_result = await create_wix_draft_post(
             site=site,
             title=d["title"],
             body_markdown=d["body_markdown"],
             seo_title=d.get("meta_title"),
             seo_description=d.get("meta_description"),
-        )
-        status_label = "success" if wix_draft_id else "wix_unavailable"
+        ) or {}
+        wix_draft_id = wix_result.get("draft_id")
+        wix_post_id = wix_result.get("post_id")
+        wix_url = wix_result.get("url")
+        status_label = "success" if wix_post_id else ("wix_draft_only" if wix_draft_id else "wix_unavailable")
     elif site_type == "vps_api":
         vps_resp = await publish_to_vps_api(site, d)
         if vps_resp:
@@ -844,6 +849,8 @@ async def publish_draft(draft_id: str, payload: PublishRequest, user=Depends(get
         "title": d["title"],
         "action": "publish_attempt",
         "wix_draft_id": wix_draft_id,
+        "wix_post_id": wix_post_id,
+        "wix_url": wix_url,
         "vps_published_id": vps_published_id,
         "ftp_published_slug": ftp_published_slug,
         "status": status_label,
@@ -852,9 +859,11 @@ async def publish_draft(draft_id: str, payload: PublishRequest, user=Depends(get
     }
     await db.publish_logs.insert_one(log_entry)
 
-    is_published = bool(wix_draft_id or vps_published_id or ftp_published_slug)
+    is_published = bool(wix_post_id or wix_draft_id or vps_published_id or ftp_published_slug)
     updates = {
         "wix_draft_id": wix_draft_id,
+        "wix_post_id": wix_post_id,
+        "wix_url": wix_url,
         "status": "published" if is_published else "ready",
         "updated_at": now_iso(),
     }

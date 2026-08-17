@@ -268,6 +268,17 @@ Préférence : 20 fonctionnalités exceptionnelles plutôt que 100 moyennes.
   GitHub Pages 1-3 min. NOTE logitag.ch : site hébergé chez WIX — la publication GitHub Pages n'y sert rien ;
   l'URL partagée sur LinkedIn était un 404 Wix (vraie cause de l'aperçu sans image). Publication Wix = backlog P2.
 
+- [x] **Publication Wix réelle (Markdown → Ricos → publish)** (2026-06-15, testé unit mocks + régression) :
+  `create_wix_draft_post` (routes_sites.py) refondu selon playbook officiel : conversion Markdown via
+  POST /ricos/v1/ricos-document/convert/to-ricos (plugins HEADING/LINK/TABLE/DIVIDER/CODE_BLOCK), validation
+  fixDocument, memberId auto-résolu via /members/v1/members (caché sur site.wix_member_id), création brouillon
+  (excerpt=meta_description, fieldsets URL) puis POST /blog/v3/draft-posts/{id}/publish → postId + URL publique.
+  wix_headers corrigé (wix-site-id SEUL, plus de wix-account-id). Erreurs 401/403 → message français actionnable
+  (permission Manage Blog). Nouveau POST /api/sites/{id}/test-wix. DraftPublic + drafts : wix_post_id, wix_url.
+  Frontend : toast « Article PUBLIÉ sur Wix » avec lien, bandeau avec URL. L'utilisateur doit créer une clé API
+  Wix (manage.wix.com/account/api-keys, permission Blog) et configurer le site logitag en type wix.
+  LIMITE : image de couverture non envoyée à Wix (nécessite upload Wix Media, à faire si demandé).
+
 ## Backlog / Phase 2 (P0)
 - [x] Génération en lot (batch) — fait (Automation.jsx)
 - [x] Calendrier éditorial cron — fait

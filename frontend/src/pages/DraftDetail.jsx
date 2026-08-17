@@ -117,8 +117,14 @@ export default function DraftDetail() {
     setPublishing(true);
     try {
       const { data } = await api.post(`/drafts/${id}/publish`, { publish_immediately: false });
-      if (data.wix_draft_id) {
-        toast.success("Brouillon créé sur Wix avec succès");
+      if (data.wix_post_id) {
+        toast.success("Article PUBLIÉ sur votre blog Wix 🎉", {
+          description: data.wix_url ? `En ligne : ${data.wix_url}` : "Visible dans Wix → Blog → Posts",
+          action: data.wix_url ? { label: "Ouvrir", onClick: () => window.open(data.wix_url, "_blank") } : undefined,
+          duration: 9000,
+        });
+      } else if (data.wix_draft_id) {
+        toast.success("Brouillon créé sur Wix — publiez-le depuis le dashboard Wix");
       } else if (data.status === "ready") {
         toast.success("Brouillon validé · prêt à exporter ou copier-coller");
       } else {
@@ -401,7 +407,12 @@ export default function DraftDetail() {
       {draft.wix_draft_id && (
         <div className="mb-5 p-3 border border-green-200 bg-green-50 rounded-md flex items-center gap-2 text-sm text-green-800" data-testid="draft-wix-confirmation">
           <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
-          Brouillon créé sur Wix · ID <code className="font-mono text-xs">{draft.wix_draft_id}</code>
+          {draft.wix_post_id ? "Article publié sur Wix" : "Brouillon créé sur Wix"} · ID <code className="font-mono text-xs">{draft.wix_post_id || draft.wix_draft_id}</code>
+          {draft.wix_url && (
+            <a href={draft.wix_url} target="_blank" rel="noreferrer" className="underline font-medium ml-1" data-testid="draft-wix-url-link">
+              Voir l'article
+            </a>
+          )}
         </div>
       )}
 

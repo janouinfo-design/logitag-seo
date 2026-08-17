@@ -304,6 +304,8 @@ class DraftPublic(BaseModel):
     created_at: str
     updated_at: str
     wix_draft_id: Optional[str] = None
+    wix_post_id: Optional[str] = None
+    wix_url: Optional[str] = None
     wix_published_at: Optional[str] = None
     github_commit_sha: Optional[str] = None
     github_committed_at: Optional[str] = None
