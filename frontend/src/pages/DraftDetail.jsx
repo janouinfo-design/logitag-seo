@@ -137,9 +137,10 @@ export default function DraftDetail() {
     try {
       const { data } = await api.post(`/drafts/${id}/publish-github`);
       toast.success(`Publié sur GitHub · commit ${data.commit_sha?.slice(0, 7)}`, {
-        description: data.public_url ? `Sera disponible à ${data.public_url} après redéploiement` : "Push effectué",
+        description: data.public_url ? `⏱️ En ligne dans 1 à 3 minutes (déploiement GitHub Pages) : ${data.public_url}` : "Push effectué",
         action: data.commit_url ? { label: "Voir commit", onClick: () => window.open(data.commit_url, "_blank") } : undefined,
       });
+      (data.social_warnings || []).forEach((w) => toast.warning(w, { duration: 9000 }));
       load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Échec du push GitHub");

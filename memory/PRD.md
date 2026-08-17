@@ -258,6 +258,16 @@ Préférence : 20 fonctionnalités exceptionnelles plutôt que 100 moyennes.
   routes_sites.py : normalisation base_url à la création ET modification + crawler d'audit.
   Fix test préexistant cassé (import 'from backend' dans test_github_test_connection.py).
 
+- [x] **Open Graph / Twitter Cards / JSON-LD BlogPosting sur les articles publiés** (2026-06-15, 21 checks validés) :
+  `_render_html` (routes_publish.py) génère désormais : og:site_name, og:image:width/height/alt (dims parsées
+  de l'URL Pexels), twitter:card summary_large_image + title/description/image, JSON-LD BlogPosting complet
+  (headline, description, image, datePublished, dateModified, author, publisher, mainEntityOfPage) en plus du
+  FAQPage. og:image REFUSE les URLs non-https (base64/blob/relatif omis). Validation post-publication :
+  publish-github retourne `social_warnings[]` (image absente / non-HTTPS / HTTP>=400 / meta_description absente /
+  URL publique non configurée) — affichés en toasts warning dans DraftDetail. Toast succès mentionne le délai
+  GitHub Pages 1-3 min. NOTE logitag.ch : site hébergé chez WIX — la publication GitHub Pages n'y sert rien ;
+  l'URL partagée sur LinkedIn était un 404 Wix (vraie cause de l'aperçu sans image). Publication Wix = backlog P2.
+
 ## Backlog / Phase 2 (P0)
 - [x] Génération en lot (batch) — fait (Automation.jsx)
 - [x] Calendrier éditorial cron — fait

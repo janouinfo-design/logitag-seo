@@ -136,16 +136,43 @@ def _render_html(draft: dict, site: dict) -> str:
         faq_jsonld = f'<script type="application/ld+json">{_json.dumps(jsonld_obj, ensure_ascii=False)}</script>'
     cover_html = ""
     og_image = ""
-    if draft.get("cover_image_url"):
-        _cu = draft["cover_image_url"]
-        _alt = (draft.get("cover_image_alt") or title).replace('"', "'")
+    twitter_image = ""
+    cover_url = draft.get("cover_image_url") or ""
+    _alt = (draft.get("cover_image_alt") or title).replace('"', "'")
+    if cover_url and cover_url.startswith("https://"):
+        _cu = cover_url
         _credit = draft.get("cover_image_credit") or ""
         _credit_url = draft.get("cover_image_credit_url") or "#"
         cover_html = (
             f'<figure class="cover"><img src="{_cu}" alt="{_alt}" loading="eager">'
             f'<figcaption><a href="{_credit_url}" rel="noopener nofollow" target="_blank">{_credit}</a></figcaption></figure>'
         )
-        og_image = f'\n  <meta property="og:image" content="{_cu}">'
+        _wm = re.search(r"[?&]w=(\d+)", _cu)
+        _hm = re.search(r"[?&]h=(\d+)", _cu)
+        _w, _h = (_wm.group(1) if _wm else "1200"), (_hm.group(1) if _hm else "630")
+        og_image = (
+            f'\n  <meta property="og:image" content="{_cu}">'
+            f'\n  <meta property="og:image:width" content="{_w}">'
+            f'\n  <meta property="og:image:height" content="{_h}">'
+            f'\n  <meta property="og:image:alt" content="{_alt}">'
+        )
+        twitter_image = f'\n  <meta name="twitter:image" content="{_cu}">'
+    site_name = (site.get("name") or "").replace('"', "'")
+    published_at = draft.get("published_at") or draft.get("created_at") or datetime.now(timezone.utc).isoformat()
+    article_jsonld_obj = {
+        "@context": "https://schema.org",
+        "@type": "BlogPosting",
+        "headline": title,
+        "description": meta_desc,
+        "datePublished": published_at,
+        "dateModified": draft.get("updated_at") or published_at,
+        "author": {"@type": "Organization", "name": site_name or "Rédaction"},
+        "publisher": {"@type": "Organization", "name": site_name or "Rédaction"},
+        "mainEntityOfPage": {"@type": "WebPage", "@id": canonical},
+    }
+    if cover_url.startswith("https://"):
+        article_jsonld_obj["image"] = cover_url
+    article_jsonld = f'<script type="application/ld+json">{_json.dumps(article_jsonld_obj, ensure_ascii=False)}</script>'
     return f"""<!doctype html>
 <html lang="fr">
 <head>
@@ -155,11 +182,16 @@ def _render_html(draft: dict, site: dict) -> str:
   <meta name="description" content="{meta_desc}">
   <meta name="keywords" content="{', '.join(keywords)}">
   <link rel="canonical" href="{canonical}">
+  <meta property="og:site_name" content="{site_name}">
   <meta property="og:title" content="{meta_title}">
   <meta property="og:description" content="{meta_desc}">
   <meta property="og:type" content="article">
   <meta property="og:url" content="{canonical}">{og_image}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{meta_title}">
+  <meta name="twitter:description" content="{meta_desc}">{twitter_image}
   <meta name="generator" content="LOGI SEO Booster">
+  {article_jsonld}
   {faq_jsonld}
   <style>
     body{{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;line-height:1.65;color:#020617}}
@@ -511,12 +543,35 @@ async def publish_draft_to_github(draft_id: str, user=Depends(get_current_user))
             "github_public_url": public_url,
         }},
     )
+    # --- Validation aperçu social (Open Graph) avant de conclure ---
+    social_warnings = []
+    cov = d.get("cover_image_url") or ""
+    if not cov:
+        social_warnings.append("Article publié, mais aperçu social incomplet : image Open Graph manquante.")
+    elif not cov.startswith("https://"):
+        social_warnings.append("Article publié, mais l'image de couverture n'est pas une URL HTTPS absolue — LinkedIn n'affichera pas d'image.")
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as _c:
+                ir = await _c.head(cov)
+                if ir.status_code >= 400:
+                    ir = await _c.get(cov)
+            if ir.status_code >= 400:
+                social_warnings.append(f"Article publié, mais l'image de couverture répond HTTP {ir.status_code} — l'aperçu social sera sans image.")
+        except Exception:
+            social_warnings.append("Article publié, mais l'image de couverture est inaccessible publiquement — l'aperçu social sera sans image.")
+    if not (d.get("meta_description") or "").strip():
+        social_warnings.append("Meta description absente — l'aperçu social sera incomplet.")
+    if not public_url:
+        social_warnings.append("URL publique non configurée sur ce site (canonical/og:url absents) — renseignez « URL publique du dossier ».")
+
     return {
         "ok": True,
         "files": results,
         "sitemap": sitemap_result,
         "blog_index": blog_index_result,
         "public_url": public_url,
+        "social_warnings": social_warnings,
         "commit_sha": results[0].get("commit_sha"),
         "commit_url": results[0].get("commit_url"),
     }
